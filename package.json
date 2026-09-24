@@ -9,6 +9,7 @@
     "url": "git+https://github.com/14e28f87/fujisoft-fs040u-restart.git"
   },  
   "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "bin": {
     "fujisoft-fs040u-restart": "dist/index.js"
   },
@@ -17,7 +18,7 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "build": "tsc",
-    "prepare": "npm run build"
+    "prepack": "npm run build"
   },
   "author": "K.Tsuru <5612289+14e28f87@users.noreply.github.com> (https://github.com/14e28f87)",
   "license": "ISC",
