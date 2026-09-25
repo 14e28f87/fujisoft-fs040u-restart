@@ -16,6 +16,16 @@ const DEFAULT_PASSWORD = '';
 
 const USER_AGENT = 'FS040U-Restart-Tool/1.0';
 
+/** timeoutMs 未指定のリクエストに使うタイムアウト。ミリ秒単位。 */
+const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
+
+/**
+ * 再起動後の復帰判定方法。
+ * - `cellular`: セルラー回線への接続を確認できたら復帰とみなす。
+ * - `web`: 管理画面が応答したら復帰とみなす。
+ */
+export type Fs040uWaitMode = 'cellular' | 'web';
+
 export interface Fs040uOptions {
   /** ログインに使うユーザー名。未指定時は環境変数、既定値の順に解決する。 */
   readonly username?: string;
@@ -28,6 +38,27 @@ export interface Fs040uOptions {
 
   /** 再起動後に端末の復帰を待つ時間。ミリ秒単位。 */
   readonly timeoutMs?: number;
+
+  /** 再起動後の復帰判定方法。未指定時は `cellular`。 */
+  readonly waitFor?: Fs040uWaitMode;
+}
+
+/** セルラー回線の接続状態。 */
+export interface Fs040uCellularStatus {
+  /** セルラー回線に接続され、WAN IP が割り当てられているかどうか。 */
+  readonly connected: boolean;
+
+  /** 回線種別 (例: `lte`, `no_service`)。 */
+  readonly networkType: string;
+
+  /** 接続状態 (例: `connected`, `disconnected`)。 */
+  readonly connectionState: string;
+
+  /** WAN 側 IP アドレス。未接続時は `0.0.0.0`。 */
+  readonly ipAddress: string;
+
+  /** 端末が返したカンマ区切りの応答そのもの。 */
+  readonly raw: string;
 }
 
 export interface Fs040uSession {
@@ -90,7 +121,7 @@ function rawRequest(options: RequestOptions): Promise<string> {
         method: options.method,
         headers: options.headers,
         insecureHTTPParser: true,
-        timeout: options.timeoutMs,
+        timeout: options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       },
       (res) => {
         const chunks: Buffer[] = [];
@@ -314,4 +345,70 @@ export async function waitForDeviceOnline(timeoutMs: number, host = DEFAULT_HOST
     await new Promise((resolve) => setTimeout(resolve, 2_000));
   }
   return false;
+}
+
+/**
+ * 管理画面ホームが定期取得している回線情報から、セルラー回線の接続状態を取得する。
+ *
+ * @param session {@link login} で取得したセッション情報。
+ * @returns セルラー回線の接続状態。
+ * @throws 通信に失敗した場合、または応答形式が想定と異なる場合 (セッション切れを含む)。
+ */
+export async function getCellularStatus(session: Fs040uSession): Promise<Fs040uCellularStatus> {
+  const hostname = session.host ?? DEFAULT_HOST;
+  const raw = await postQuery(
+    hostname,
+    `/cgi-bin/ajax_get.cgi?which_ajax=ajax_get_wm_wcdma_data&sids=${randomSid()}`,
+    `http://${hostname}/home.html`,
+    session.cookie,
+  );
+  const fields = raw.trim().split(',');
+  if (fields.length < 12) {
+    throw new Error(`回線情報の応答形式が想定と異なります(応答: "${raw}")`);
+  }
+  const networkType = fields[6];
+  const connectionState = fields[7];
+  const ipAddress = fields[11];
+  return {
+    connected: connectionState === 'connected' && ipAddress !== '' && ipAddress !== '0.0.0.0',
+    networkType,
+    connectionState,
+    ipAddress,
+    raw,
+  };
+}
+
+/**
+ * 再起動完了後、FS040U がセルラー回線に接続するまでポーリングする。
+ * 再起動でセッションが失われるため、必要に応じて再ログインしながら確認する。
+ *
+ * @param timeoutMs 接続を待つ最大時間。ミリ秒単位。
+ * @param options ログイン情報と接続先。省略時は環境変数と既定値を使う。
+ * @returns 接続を確認した時点の回線状態。
+ * @throws 指定時間内にセルラー回線への接続を確認できなかった場合。
+ */
+export async function waitForCellularConnected(
+  timeoutMs: number,
+  options: Fs040uOptions = {},
+): Promise<Fs040uCellularStatus> {
+  const deadline = Date.now() + timeoutMs;
+  let session: Fs040uSession | undefined;
+  let lastState = '未取得';
+  while (Date.now() < deadline) {
+    try {
+      session ??= await login(options);
+      const status = await getCellularStatus(session);
+      if (status.connected) {
+        return status;
+      }
+      lastState = `回線種別=${status.networkType}, 接続状態=${status.connectionState}, IP=${status.ipAddress}`;
+    } catch (error) {
+      session = undefined;
+      lastState = `エラー: ${error instanceof Error ? error.message : String(error)}`;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+  }
+  throw new Error(
+    `${Math.round(timeoutMs / 1_000)}秒以内にセルラー回線への接続を確認できませんでした(最後の状態: ${lastState})`,
+  );
 }

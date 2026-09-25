@@ -1,15 +1,29 @@
 #!/usr/bin/env node
 import { pathToFileURL } from 'node:url';
 import {
+  getCellularStatus,
   login,
   setRebootReason,
   triggerReboot,
+  waitForCellularConnected,
   waitForDeviceOnline,
 } from './fs040uClient.js';
-import type { Fs040uOptions } from './fs040uClient.js';
+import type { Fs040uOptions, Fs040uWaitMode } from './fs040uClient.js';
 
-export { login, setRebootReason, triggerReboot, waitForDeviceOnline };
-export type { Fs040uOptions, Fs040uSession } from './fs040uClient.js';
+export {
+  getCellularStatus,
+  login,
+  setRebootReason,
+  triggerReboot,
+  waitForCellularConnected,
+  waitForDeviceOnline,
+};
+export type {
+  Fs040uCellularStatus,
+  Fs040uOptions,
+  Fs040uSession,
+  Fs040uWaitMode,
+} from './fs040uClient.js';
 
 /** 指定した時間だけ処理を一時停止する。 */
 function sleep(msec: number) {
@@ -42,6 +56,7 @@ function parseCliArgs(args: string[]): CliParseResult {
     password?: string;
     host?: string;
     timeoutMs?: number;
+    waitFor?: Fs040uWaitMode;
   } = {};
 
   for (let index = 0; index < args.length; index += 1) {
@@ -54,7 +69,7 @@ function parseCliArgs(args: string[]): CliParseResult {
       return { options, showHelp: true };
     }
 
-    if (!['--username', '-u', '--password', '-p', '--host', '-h', '--timeout', '-t'].includes(option)) {
+    if (!['--username', '-u', '--password', '-p', '--host', '-h', '--timeout', '-t', '--wait-for'].includes(option)) {
       throw new Error(`不明なコマンドラインオプションです: ${option}`);
     }
 
@@ -69,6 +84,11 @@ function parseCliArgs(args: string[]): CliParseResult {
       options.password = value;
     } else if (option === '--host' || option === '-h') {
       options.host = value;
+    } else if (option === '--wait-for') {
+      if (value !== 'cellular' && value !== 'web') {
+        throw new Error(`--wait-for には cellular または web を指定してください: ${value}`);
+      }
+      options.waitFor = value;
     } else {
       const seconds = Number(value);
       if (!Number.isFinite(seconds) || seconds <= 0) {
@@ -90,6 +110,9 @@ function printUsage(): void {
   -p, --password <pass>    FS040Uのパスワード
   -h, --host <host>        接続先ホスト (既定値: 192.168.200.1)
   -t, --timeout <seconds>  復帰確認の待機時間 (既定値: 60秒)
+      --wait-for <mode>    復帰の判定方法 (既定値: cellular)
+                             cellular: セルラー回線への接続を確認
+                             web:      管理画面の応答を確認
       --help              このヘルプを表示`);
 }
 
@@ -99,9 +122,11 @@ function printUsage(): void {
  * `username` と `password` は、指定したオプション、環境変数、既定値の順に解決する。
  * `host` と `timeoutMs` は、指定したオプションがなければソースコードの既定値を使う。
  * 再起動理由の記録だけは補助処理として扱い、失敗しても再起動要求を続行する。
+ * 復帰の判定は `waitFor` で選び、未指定時はセルラー回線への接続を待つ。
  *
- * @param options ログイン情報、接続先、復帰確認の待機時間。省略可能。
- * @throws ログインに失敗した場合、または再起動要求前の通信に失敗した場合。
+ * @param options ログイン情報、接続先、復帰確認の待機時間と判定方法。省略可能。
+ * @throws ログインに失敗した場合、再起動要求前の通信に失敗した場合、
+ *   または指定時間内に復帰を確認できなかった場合。
  */
 export async function rebootFs040u(options: Fs040uOptions = {}): Promise<void> {
   console.log('FS040U にログインしています...');
@@ -120,13 +145,20 @@ export async function rebootFs040u(options: Fs040uOptions = {}): Promise<void> {
 
   await sleep(2000);
 
-  console.log('端末の復帰を待機しています...');
-  const isOnline = await waitForDeviceOnline(options.timeoutMs ?? 60_000, session.host);
-  if (isOnline) {
-    console.log('端末が復帰し、管理画面への応答を確認しました。');
-  } else {
-    console.warn('60秒以内に端末の復帰を確認できませんでした(再起動要求自体は送信済みです)。');
+  const timeoutMs = options.timeoutMs ?? 60_000;
+  if ((options.waitFor ?? 'cellular') === 'cellular') {
+    console.log('セルラー回線の接続を待機しています...');
+    const status = await waitForCellularConnected(timeoutMs, { ...options, host: session.host });
+    console.log(`端末が復帰し、セルラー回線への接続を確認しました(回線種別: ${status.networkType}, IP: ${status.ipAddress})。`);
+    return;
   }
+
+  console.log('端末の復帰を待機しています...');
+  const isOnline = await waitForDeviceOnline(timeoutMs, session.host);
+  if (!isOnline) {
+    throw new Error(`${Math.round(timeoutMs / 1_000)}秒以内に端末の復帰を確認できませんでした(再起動要求自体は送信済みです)`);
+  }
+  console.log('端末が復帰し、管理画面への応答を確認しました。');
 }
 
 export default rebootFs040u;

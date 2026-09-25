@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { pathToFileURL } from 'node:url';
-import { login, setRebootReason, triggerReboot, waitForDeviceOnline, } from './fs040uClient.js';
-export { login, setRebootReason, triggerReboot, waitForDeviceOnline };
+import { getCellularStatus, login, setRebootReason, triggerReboot, waitForCellularConnected, waitForDeviceOnline, } from './fs040uClient.js';
+export { getCellularStatus, login, setRebootReason, triggerReboot, waitForCellularConnected, waitForDeviceOnline, };
 /** 指定した時間だけ処理を一時停止する。 */
 function sleep(msec) {
     return new Promise((resolve) => setTimeout(resolve, msec));
@@ -27,7 +27,7 @@ function parseCliArgs(args) {
         if (option === '--help') {
             return { options, showHelp: true };
         }
-        if (!['--username', '-u', '--password', '-p', '--host', '-h', '--timeout', '-t'].includes(option)) {
+        if (!['--username', '-u', '--password', '-p', '--host', '-h', '--timeout', '-t', '--wait-for'].includes(option)) {
             throw new Error(`不明なコマンドラインオプションです: ${option}`);
         }
         const value = inlineValue ?? args[++index];
@@ -42,6 +42,12 @@ function parseCliArgs(args) {
         }
         else if (option === '--host' || option === '-h') {
             options.host = value;
+        }
+        else if (option === '--wait-for') {
+            if (value !== 'cellular' && value !== 'web') {
+                throw new Error(`--wait-for には cellular または web を指定してください: ${value}`);
+            }
+            options.waitFor = value;
         }
         else {
             const seconds = Number(value);
@@ -62,6 +68,9 @@ function printUsage() {
   -p, --password <pass>    FS040Uのパスワード
   -h, --host <host>        接続先ホスト (既定値: 192.168.200.1)
   -t, --timeout <seconds>  復帰確認の待機時間 (既定値: 60秒)
+      --wait-for <mode>    復帰の判定方法 (既定値: cellular)
+                             cellular: セルラー回線への接続を確認
+                             web:      管理画面の応答を確認
       --help              このヘルプを表示`);
 }
 /**
@@ -70,9 +79,11 @@ function printUsage() {
  * `username` と `password` は、指定したオプション、環境変数、既定値の順に解決する。
  * `host` と `timeoutMs` は、指定したオプションがなければソースコードの既定値を使う。
  * 再起動理由の記録だけは補助処理として扱い、失敗しても再起動要求を続行する。
+ * 復帰の判定は `waitFor` で選び、未指定時はセルラー回線への接続を待つ。
  *
- * @param options ログイン情報、接続先、復帰確認の待機時間。省略可能。
- * @throws ログインに失敗した場合、または再起動要求前の通信に失敗した場合。
+ * @param options ログイン情報、接続先、復帰確認の待機時間と判定方法。省略可能。
+ * @throws ログインに失敗した場合、再起動要求前の通信に失敗した場合、
+ *   または指定時間内に復帰を確認できなかった場合。
  */
 export async function rebootFs040u(options = {}) {
     console.log('FS040U にログインしています...');
@@ -88,14 +99,19 @@ export async function rebootFs040u(options = {}) {
     await triggerReboot(session);
     console.log('再起動要求を送信しました。');
     await sleep(2000);
+    const timeoutMs = options.timeoutMs ?? 60000;
+    if ((options.waitFor ?? 'cellular') === 'cellular') {
+        console.log('セルラー回線の接続を待機しています...');
+        const status = await waitForCellularConnected(timeoutMs, { ...options, host: session.host });
+        console.log(`端末が復帰し、セルラー回線への接続を確認しました(回線種別: ${status.networkType}, IP: ${status.ipAddress})。`);
+        return;
+    }
     console.log('端末の復帰を待機しています...');
-    const isOnline = await waitForDeviceOnline(options.timeoutMs ?? 60000, session.host);
-    if (isOnline) {
-        console.log('端末が復帰し、管理画面への応答を確認しました。');
+    const isOnline = await waitForDeviceOnline(timeoutMs, session.host);
+    if (!isOnline) {
+        throw new Error(`${Math.round(timeoutMs / 1000)}秒以内に端末の復帰を確認できませんでした(再起動要求自体は送信済みです)`);
     }
-    else {
-        console.warn('60秒以内に端末の復帰を確認できませんでした(再起動要求自体は送信済みです)。');
-    }
+    console.log('端末が復帰し、管理画面への応答を確認しました。');
 }
 export default rebootFs040u;
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
