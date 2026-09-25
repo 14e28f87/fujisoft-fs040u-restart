@@ -126,12 +126,29 @@ export async function login(options = {}) {
     if (checkResult.trim() !== '1') {
         throw new Error(`ログイン認証に失敗しました(応答: "${checkResult}")`);
     }
-    const sid = randomSid();
-    const sessionResult = await postQuery(hostname, `/ajax_session?sid=${sid}`, `${baseUrl}/home.html`);
-    if (sessionResult.trim() !== String(sid)) {
+    let sid = randomSid();
+    let sessionResult = (await postQuery(hostname, `/ajax_session?sid=${sid}`, `${baseUrl}/home.html`)).trim();
+    // 応答 "2" は他のブラウザーや前回実行のセッションが残っている状態。切断して取り直す。
+    if (sessionResult === '2') {
+        await postQuery(hostname, '/ajax_session?sid=logout', `${baseUrl}/home.html`);
+        sid = randomSid();
+        sessionResult = (await postQuery(hostname, `/ajax_session?sid=${sid}`, `${baseUrl}/home.html`)).trim();
+    }
+    if (sessionResult !== String(sid)) {
         throw new Error(`セッション確立に失敗しました(応答: "${sessionResult}")`);
     }
     return { cookie: `lct_remember_me=; ddddd=${sid}; dddddddd=${sid}`, host: hostname };
+}
+/**
+ * 管理画面のセッションを破棄し、他からログインできる状態に戻す。
+ * FS040U は同時に 1 セッションしか保持できないため、使い終えたら呼び出す。
+ *
+ * @param session {@link login} で取得したセッション情報。
+ * @throws 管理画面との通信に失敗した場合。
+ */
+export async function logout(session) {
+    const hostname = session.host ?? DEFAULT_HOST;
+    await postQuery(hostname, '/ajax_session?sid=logout', `http://${hostname}/home.html`, session.cookie);
 }
 /**
  * 「システム設定→端末再起動」画面で再起動理由を記録する付随処理。
@@ -242,20 +259,27 @@ export async function waitForCellularConnected(timeoutMs, options = {}) {
     const deadline = Date.now() + timeoutMs;
     let session;
     let lastState = '未取得';
-    while (Date.now() < deadline) {
-        try {
-            session ?? (session = await login(options));
-            const status = await getCellularStatus(session);
-            if (status.connected) {
-                return status;
+    try {
+        while (Date.now() < deadline) {
+            try {
+                session ?? (session = await login(options));
+                const status = await getCellularStatus(session);
+                if (status.connected) {
+                    return status;
+                }
+                lastState = `回線種別=${status.networkType}, 接続状態=${status.connectionState}, IP=${status.ipAddress}`;
             }
-            lastState = `回線種別=${status.networkType}, 接続状態=${status.connectionState}, IP=${status.ipAddress}`;
+            catch (error) {
+                session = undefined;
+                lastState = `エラー: ${error instanceof Error ? error.message : String(error)}`;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 2000));
         }
-        catch (error) {
-            session = undefined;
-            lastState = `エラー: ${error instanceof Error ? error.message : String(error)}`;
+    }
+    finally {
+        if (session) {
+            await logout(session).catch(() => undefined);
         }
-        await new Promise((resolve) => setTimeout(resolve, 2000));
     }
     throw new Error(`${Math.round(timeoutMs / 1000)}秒以内にセルラー回線への接続を確認できませんでした(最後の状態: ${lastState})`);
 }

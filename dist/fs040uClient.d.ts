@@ -51,6 +51,14 @@ export interface Fs040uSession {
  */
 export declare function login(options?: Fs040uOptions): Promise<Fs040uSession>;
 /**
+ * 管理画面のセッションを破棄し、他からログインできる状態に戻す。
+ * FS040U は同時に 1 セッションしか保持できないため、使い終えたら呼び出す。
+ *
+ * @param session {@link login} で取得したセッション情報。
+ * @throws 管理画面との通信に失敗した場合。
+ */
+export declare function logout(session: Fs040uSession): Promise<void>;
+/**
  * 「システム設定→端末再起動」画面で再起動理由を記録する付随処理。
  * 実際の再起動には不要な可能性があるため、失敗しても呼び出し元は処理を継続してよい。
  *

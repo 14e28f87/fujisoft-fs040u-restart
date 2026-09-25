@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { getCellularStatus, login, setRebootReason, triggerReboot, waitForCellularConnected, waitForDeviceOnline } from './fs040uClient.js';
+import { getCellularStatus, login, logout, setRebootReason, triggerReboot, waitForCellularConnected, waitForDeviceOnline } from './fs040uClient.js';
 import type { Fs040uOptions } from './fs040uClient.js';
-export { getCellularStatus, login, setRebootReason, triggerReboot, waitForCellularConnected, waitForDeviceOnline, };
+export { getCellularStatus, login, logout, setRebootReason, triggerReboot, waitForCellularConnected, waitForDeviceOnline, };
 export type { Fs040uCellularStatus, Fs040uOptions, Fs040uSession, Fs040uWaitMode, } from './fs040uClient.js';
 /**
  * FS040U のログインから再起動後の復帰確認までを一括して実行する。

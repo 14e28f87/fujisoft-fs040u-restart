@@ -3,6 +3,7 @@ import { pathToFileURL } from 'node:url';
 import {
   getCellularStatus,
   login,
+  logout,
   setRebootReason,
   triggerReboot,
   waitForCellularConnected,
@@ -13,6 +14,7 @@ import type { Fs040uOptions, Fs040uWaitMode } from './fs040uClient.js';
 export {
   getCellularStatus,
   login,
+  logout,
   setRebootReason,
   triggerReboot,
   waitForCellularConnected,
@@ -109,7 +111,7 @@ function printUsage(): void {
   -u, --username <name>    FS040Uのユーザー名
   -p, --password <pass>    FS040Uのパスワード
   -h, --host <host>        接続先ホスト (既定値: 192.168.200.1)
-  -t, --timeout <seconds>  復帰確認の待機時間 (既定値: 60秒)
+  -t, --timeout <seconds>  復帰確認の待機時間 (既定値: 120秒)
       --wait-for <mode>    復帰の判定方法 (既定値: cellular)
                              cellular: セルラー回線への接続を確認
                              web:      管理画面の応答を確認
@@ -145,7 +147,7 @@ export async function rebootFs040u(options: Fs040uOptions = {}): Promise<void> {
 
   await sleep(2000);
 
-  const timeoutMs = options.timeoutMs ?? 60_000;
+  const timeoutMs = options.timeoutMs ?? 120_000;
   if ((options.waitFor ?? 'cellular') === 'cellular') {
     console.log('セルラー回線の接続を待機しています...');
     const status = await waitForCellularConnected(timeoutMs, { ...options, host: session.host });
